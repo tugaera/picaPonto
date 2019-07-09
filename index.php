@@ -45,10 +45,16 @@ $redirect_uri = 'http://' . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF'];
 $client = new Google_Client();
 $client->setAuthConfig($oauth_credentials);
 $client->setRedirectUri($redirect_uri);
-$client->addScope(["https://www.googleapis.com/auth/drive",
+$client->addScope(["https://www.googleapis.com/auth/userinfo.email",
+                  "https://www.googleapis.com/auth/drive",
                   "https://www.googleapis.com/auth/spreadsheets.readonly"]);
+$objOAuthService = new Google_Service_Oauth2($client);
 $service = new Google_Service_Sheets($client);
 $drive = new Google_Service_Drive($client);
+
+$flagSpreadsheet = false;
+$flagHeader = false;
+$mainSpreadsheetId = $configApp["mainSpreadsheetId"];
 // add "?logout" to the URL to remove a token from the session
 if (isset($_REQUEST['logout'])) {
   unset($_SESSION['upload_token']);
@@ -87,7 +93,7 @@ if (!empty($_SESSION['upload_token'])) {
  ************************************************/
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && $client->getAccessToken()) {
   // The ID of the spreadsheet to update.
-  $spreadsheetId = $configApp["spreadsheetId"];  // TODO: Update placeholder value.
+  $spreadsheetId = getSpreadsheetId();  // TODO: Update placeholder value.
 
   switch ($_POST['btn']) {
     case 'read':
@@ -174,12 +180,58 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $client->getAccessToken()) {
         'properties' => [
             'title' => $title,
             'timeZone' => 'Europe/Lisbon'
+        ],
+        'sheets' => [
+          [
+            'properties' => [
+              'title' => 'Folha1',
+              'sheetId' => 01,
+              'index' => 01,
+              'hidden' => false
+            ]/*,
+            'data' => [
+              'startRow' => 0,
+              'startColumn' => 0,
+              'rowData' => [
+                'values' => [
+                  "ID"
+                ]
+              ]
+            ]*/
+          ],
+          [
+            'properties' => [
+              'title' => 'Folha2',
+              'sheetId' => 02,
+              'index' => 02,
+              'hidden' => false
+            ]
+          ]
         ]
       ]);
       $spreadsheet = $service->spreadsheets->create($spreadsheet, [
           'fields' => 'spreadsheetId'
       ]);
       printf("Spreadsheet ID: %s\n", $spreadsheet->spreadsheetId);
+      
+      // ADD ID to MAIN SHEET
+      $values = [
+        [$objOAuthService->userinfo->get()["email"], $spreadsheet->spreadsheetId],
+      ];
+      //'majorDimension' => 'ROWS',
+      $body = new Google_Service_Sheets_ValueRange([
+          'values' => $values,
+          'majorDimension' => 'ROWS'
+      ]);
+
+      $valueInputOption = "USER_ENTERED";
+      $params = [
+          'valueInputOption' => $valueInputOption
+      ];
+      $range = "Folha11!A:B";
+      $result = $service->spreadsheets_values->append($mainSpreadsheetId, $range, $body, $params);
+      printf("%d cells appended.", $result->getUpdates()->getUpdatedCells());
+
       break;
     case 'add_header':
       // The ID of the spreadsheet to update.
@@ -235,71 +287,132 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $client->getAccessToken()) {
   }
   
 
+} //else
+if ($client->getAccessToken()) {
+  $userData = $objOAuthService->userinfo->get();
+  
+  // Check if spreadsheet
+  if(empty($_SESSION['spreadsheetId'])) {
+    $range = 'Folha11!A2:B';
+    $email = $userData["email"];
+    $response = $service->spreadsheets_values->get($mainSpreadsheetId, $range);
+    $values = $response->getValues();
+    if (empty($values)) {
+        print "No MAIN data found.\n";
+    } else {
+      foreach ($values as $row) 
+        if($row[0] == $email){ // user already with spreadsheetId
+          // store in the session also spreadsheetId
+          $_SESSION['spreadsheetId'] = $row[1];
+          $spreadsheetId = $row[1];
+          $flagSpreadsheet = true;
+        }
+    }
+  } else {
+    $spreadsheetId = $_SESSION['spreadsheetId'];
+    $flagSpreadsheet = true;
+  }
+  
+
+  // Check if spreadsheet has header
+  if($flagSpreadsheet) {
+    $mainSpreadsheetId = getSpreadsheetId();
+    $range = 'Folha1!A1:G1';
+    $header = array("ID", "Data", "Hora", "Torniquete", "Tempo", "Falta", "Saida");  
+    $response = $service->spreadsheets_values->get($mainSpreadsheetId, $range);
+    $values = $response->getValues();
+    if (empty($values)) {
+        print "No HEADER data found.\n";
+    } else {
+      $values = $values[0];
+      $flagHeader = true;
+      for ($i=0; $i < count($values) ; $i++) { 
+        if($values[$i] != $header[$i]){
+          $flagHeader = false;
+          break;
+        }
+      }
+      if(!$flagHeader) {
+        print "Need to create header.\n";
+      }
+    }
+
+  }
+  
+}
+
+//print_r($flagSpreadsheet ? "1" : "0");
+//print_r($flagHeader ? "1" : "0");
+//print_r($spreadsheetId);
+
+function getSpreadsheetId() {
+  if (!empty($_SESSION['spreadsheetId']))
+    return $_SESSION['spreadsheetId'];
+  /*
+  else if(!empty($configApp["spreadsheetId"]))
+    return $configApp["spreadsheetId"];
+  */
+  else
+    return null;
 }
 ?>
 
-<!doctype html>
+
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <!-- Required meta tags -->
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <head>
+        <!-- Required meta tags -->
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-    <!-- Bootstrap CSS -->
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/css/bootstrap.min.css" integrity="sha384-GJzZqFGwb1QTTN6wy59ffF1BuGJpLSa9DkKMp0DgiMDm4iYMj70gZWKYbI706tWS" crossorigin="anonymous">
+        <!-- Bootstrap CSS -->
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/css/bootstrap.min.css" integrity="sha384-GJzZqFGwb1QTTN6wy59ffF1BuGJpLSa9DkKMp0DgiMDm4iYMj70gZWKYbI706tWS" crossorigin="anonymous">
 
-    <title>PicaPonto</title>
-  </head>
-  <body>
-    <div class="box">
-      <?php if (isset($authUrl)): ?>
-        <div class="request">
-          <a class='login' href='<?= $authUrl ?>'>Connect Me!</a>
+        <title>PicaPonto</title>
+    </head>
+
+    <body>
+
+        <div class="box">
+            <?php if (isset($authUrl)): ?>
+              <div class="request">
+                <a class='login' href='<?= $authUrl ?>'>Connect Me!</a>
+              </div>
+            <?php else: ?>
+                <?php if($_SERVER['REQUEST_METHOD'] == 'POST'): ?>
+                    <div class="shortened">
+                        <p>Your call was successful! Check...</p>
+                    </div>
+                <?php endif ?>
+              <form method="POST">
+                <?php if(empty($flagSpreadsheet) || !$flagSpreadsheet): ?>
+                    <input type="submit" name="btn" value="create_sheet" class="btn btn-secondary">
+                <?php elseif(empty($flagHeader) || !$flagHeader): ?>
+                    <input type="submit" name="btn" value="add_header" class="btn btn-success">
+                <?php elseif(!empty($spreadsheetId) && $spreadsheetId != ""): ?>
+                    <input type="submit" name="btn" value="read" class="btn btn-primary">
+                    <input type="submit" name="btn" value="new_row" class="btn btn-danger">
+                <?php endif ?>
+                
+                <!--
+                <button type="button" class="btn btn-warning">Warning</button>
+                <button type="button" class="btn btn-info">Info</button>
+                <button type="button" class="btn btn-light">Light</button>
+                <button type="button" class="btn btn-dark">Dark</button>
+      
+                <button type="button" class="btn btn-link">Link</button>
+                -->
+              </form>
+            <?php endif ?>
         </div>
-      <?php elseif($_SERVER['REQUEST_METHOD'] == 'POST'): ?>
-        <div class="shortened">
-          <p>Your call was successful! Check...</p>
-        </div>
-        <form method="POST">
-          <input type="submit" name="btn" value="read" class="btn btn-primary">
-          <input type="submit" name="btn" value="create_sheet" class="btn btn-secondary">
-          <input type="submit" name="btn" value="add_header" class="btn btn-success">
-          <input type="submit" name="btn" value="new_row" class="btn btn-danger">
-          <!--
-          <button type="button" class="btn btn-warning">Warning</button>
-          <button type="button" class="btn btn-info">Info</button>
-          <button type="button" class="btn btn-light">Light</button>
-          <button type="button" class="btn btn-dark">Dark</button>
 
-          <button type="button" class="btn btn-link">Link</button>
-          -->
-        </form>
-      <?php else: ?>
-        <form method="POST">
-          <input type="submit" name="btn" value="read" class="btn btn-primary">
-          <input type="submit" name="btn" value="create_sheet" disabled class="btn btn-secondary">
-          <input type="submit" name="btn" value="add_header" class="btn btn-success">
-          <input type="submit" name="btn" value="new_row" class="btn btn-danger">
-          <!--
-          <button type="button" class="btn btn-warning">Warning</button>
-          <button type="button" class="btn btn-info">Info</button>
-          <button type="button" class="btn btn-light">Light</button>
-          <button type="button" class="btn btn-dark">Dark</button>
-
-          <button type="button" class="btn btn-link">Link</button>
-          -->
-        </form>
-      <?php endif ?>
-    </div>
-
-    <!-- Optional JavaScript -->
-    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js" integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut" crossorigin="anonymous"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/js/bootstrap.min.js" integrity="sha384-B0UglyR+jN6CkvvICOB2joaf5I4l3gm9GU6Hc1og6Ls7i6U/mkkaduKaBhlAXv9k" crossorigin="anonymous"></script>
-  </body>
+        <!-- Optional JavaScript -->
+        <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+        <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js" integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut" crossorigin="anonymous"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/js/bootstrap.min.js" integrity="sha384-B0UglyR+jN6CkvvICOB2joaf5I4l3gm9GU6Hc1og6Ls7i6U/mkkaduKaBhlAXv9k" crossorigin="anonymous"></script>
+    </body>
 </html>
-
 
 
 <?= pageFooter(__FILE__) ?>

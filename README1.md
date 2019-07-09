@@ -10,7 +10,8 @@ ToDo
 
 #CREDITS
 https://developers.google.com/sheets/
-https://github.com/googleapis/google-api-php-client
+https://github.com/googleapis
+https://github.com/gsuitedevs
 
 #CONFIG
 - File configApp.json : need to add spreadsheetId;
